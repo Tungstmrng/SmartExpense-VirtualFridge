@@ -11,8 +11,7 @@ app.use(express.json());
 
 const upload = multer({ storage: multer.memoryStorage() });
 
-// DICTIONARY FOR FRIDGE CATEGORIZATION AND EXPIRY ESTIMATION
-// ENHANCED DICTIONARY FOR FRIDGE CATEGORIZATION
+// ENHANCED DICTIONARY FOR FRIDGE CATEGORIZATION & EXPIRY ESTIMATION
 const FRIDGE_KEYWORDS = [
   { keywords: ['milk', 'susu', 'uht', 'creamer', 'indomilk', 'ultramilk', 'dancow', 'm1lk', 'susu/'], category: 'Fridge', expiryDays: 7 },
   { keywords: ['egg', 'telur', 'tlor'], category: 'Fridge', expiryDays: 14 },
@@ -36,13 +35,9 @@ function categorizeItem(itemName) {
 // HELPER: CLEAN ITEM NAMES FROM COLUMN NOISE & LEADING QUANTITIES
 function sanitizeItemName(rawName) {
   return rawName
-    // Remove non-alphanumeric chars (keep spaces)
     .replace(/[^a-zA-Z0-9\s]/g, ' ')
-    // Remove leading line numbers/quantities (e.g. "5 KOPIKO" -> "KOPIKO")
     .replace(/^\d+\s+/, '')
-    // Remove trailing price/qty column digits (e.g. "ABC ORANGE 1 13 500" -> "ABC ORANGE")
     .replace(/\s+\d+(\s+\d+)*$/, '')
-    // Collapse multiple spaces
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -54,73 +49,148 @@ function parseReceiptText(rawText) {
   let totalAmount = 0;
   const items = [];
 
-  // 1. EXPANDED BLACKLIST (ADDRESSES, CITIES, & RECEIPT NOISE)
-  const ignorePatterns = [
-    // Address & City Keywords (Added Sleman, Sukoharjo, Ngaglik, Jogja, etc.)
-    /\b(jl|jalan|no|rt|rw|kel|kec|kab|kota|lantai|lt|ruko|blok|gedung|cabang|outlet|branch|plaza|mall)\b/i,
-    /\b(sleman|sukoharjo|ngaglik|yogyakarta|jogja|bandung|jakarta|surabaya|semarang|malang)\b/i,
-    /\b(telp|phone|fax|pos|zip|code|kodepos|npwp)\b/i,
-    
-    // Receipt Metadata
-    /\d{1,2}[\/\.-]\d{1,2}[\/\.-]\d{2,4}/, 
-    /\d{1,2}:\d{2}/,                       
-    /cash|kembali|change|tunai|debit|visa|mastercard/i,
-    /subtotal|ppn|tax|diskon|discount|grand total/i,
-    /faktur|member|item|qty|harga|kasir|cashier/i,
-    /terima kasih|thank you|selamat datang|voucher|cancel/i
+  // REGEX PATTERNS FOR SUMMARY & PAYMENT WORDS (HANDLES OCR TYPOS LIKE T0TAL, TUNAL, KEMBAL1)
+  const SUMMARY_PATTERNS = [
+    /t[o0][t4a][a4l]/i,            // TOTAL, T0TAL, TOT4L, TOTL
+    /sub\s*t[o0]t[a4]l/i,         // SUBTOTAL, SUB TOTAL
+    /g[r1]and\s*t[o0]t[a4]l/i,    // GRAND TOTAL
+    /t[u1n][n1a][a4i1l]/i,        // TUNAI, TUNAL, TUNA1
+    /b[a4]y[a4]r/i,               // BAYAR
+    /k[e3]mb[a4]l[i1a]/i,         // KEMBALI, KEMBALIAN
+    /c[a4]sh/i,                   // CASH
+    /ch[a4]ng[e3]/i,              // CHANGE
+    /s[i1]s[a4]/i,                // SISA
+    /p[a4]j[a4]k|ppn|tax/i,       // PAJAK, PPN, TAX
+    /d[e3]b[i1]t/i,               // DEBIT
+    /qr[i1]s|g[o0]p[a4]y|ov[o0]|sh[o0]p[e3]e|d[a4]n[a4]/i, // QRIS, GOPAY, OVO, SHOPEE, DANA
+    /m[a4]st[e3]rc[a4]rd|v[i1]s[a4]|b[a4]nk|bc[a4]|m[a4]nd[i1]r[i1]/i,
+    /h[a4]rg[a4]|j[u1]ml[a4]h|qt[y1]|it[e3]m/i,
+    /d[i1]s[ck][o0]n|d1sc|p[o0]t[o0]ng[a4]n|h[e3]m[a4]t|pr[o0]m[o0]/i
   ];
 
-  // 2. DETECT MERCHANT NAME
-  for (let i = 0; i < Math.min(4, lines.length); i++) {
-    const lineLower = lines[i].toLowerCase();
-    const isNoise = ignorePatterns.some(p => p.test(lineLower));
-    
-    if (!isNoise) {
+  // EXPANDED ADDRESS & STORE NOISE PATTERNS
+  const ignorePatterns = [
+    /\b(jl|jln|j1|jalan|no|rt|rw|kel|kec|kab|kota|lantai|lt|ruko|blok|gedung|cabang|outlet|branch|plaza|mall)\b/i,
+    /\b(indomaret|alfamart|alfamidi|superindo|hypermart|transmart|circle\s*k|minimarket)\b/i,
+    /\b(sleman|sukoharjo|ngaglik|yogyakarta|jogja|bandung|jakarta|surabaya|semarang|malang|solo|denpasar|bogor|depok|tangerang|bekasi)\b/i,
+    /\b(telp|telepon|phone|fax|pos|zip|code|kodepos|npwp|stnk|kasir|cashier|pos\d+|resi|faktur|member)\b/i,
+    /\b(\d{10,13})\b/,
+    /\d{1,2}[\/\.-]\d{1,2}[\/\.-]\d{2,4}/, 
+    /\d{1,2}:\d{2}/,                       
+    /terima\s*kasih|thank\s*you|selamat\s*datang|voucher|cancel|layanan/i,
+    /^\s*-\s*\d+/,
+    /-\s*(\d{1,3}(?:[.,]\d{3})+|\b\d{3,6}\b)/
+  ];
+
+  // HELPER FUNCTION: STRICT NOISE / SUMMARY CHECKER
+  const isNoiseOrSummary = (text) => {
+    if (!text) return true;
+    const textLower = text.toLowerCase().trim();
+    if (SUMMARY_PATTERNS.some(pattern => pattern.test(textLower))) return true;
+    if (ignorePatterns.some(pattern => pattern.test(textLower))) return true;
+    return false;
+  };
+
+  // 1. DETECT MERCHANT NAME
+  for (let i = 0; i < Math.min(5, lines.length); i++) {
+    if (!isNoiseOrSummary(lines[i])) {
       const cleanHeader = sanitizeItemName(lines[i]);
-      if (cleanHeader.length >= 3 && !/\d/.test(cleanHeader)) {
+      if (cleanHeader.length >= 3 && /[a-zA-Z]/.test(cleanHeader)) {
         merchantName = cleanHeader;
         break;
       }
     }
   }
 
-  const priceRegex = /(\d{1,3}(?:[.,]\d{3})+|\b\d{4,6}\b)/;
+  const priceRegex = /(\d{1,3}(?:[.,]\d{3})+|\b\d{4,6}\b)/g;
 
-  // 3. PROCESS ITEMS
-  for (const line of lines) {
+  // 2. PROCESS ITEMS WITH MULTI-LINE LOOKAHEAD
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
     const lineLower = line.toLowerCase();
 
-    if (ignorePatterns.some(pattern => pattern.test(lineLower))) {
-      if (lineLower.includes('total') || lineLower.includes('bayar')) {
-        const match = line.match(priceRegex);
-        if (match) {
-          const parsedTotal = parseInt(match[0].replace(/[^0-9]/g, ''), 10);
+    // STRICT CHECK ON RAW LINE
+    if (isNoiseOrSummary(line)) {
+      if (lineLower.includes('total') || lineLower.includes('bayar') || lineLower.includes('t0tal')) {
+        const matches = line.match(priceRegex);
+        if (matches) {
+          const lastPrice = matches[matches.length - 1];
+          const parsedTotal = parseInt(lastPrice.replace(/[^0-9]/g, ''), 10);
           if (parsedTotal > totalAmount) totalAmount = parsedTotal;
         }
       }
-      continue; 
+      continue; // Strictly skip line
     }
 
-    const priceMatch = line.match(priceRegex);
-    if (priceMatch) {
-      const rawPrice = priceMatch[0];
+    // Skip negative price lines (discounts)
+    if (line.includes('-') && !lineLower.includes('item')) {
+      continue;
+    }
+
+    const priceMatches = line.match(priceRegex);
+
+    // KASUS A: ITEM 1 BARIS (Nama + Harga di baris yang sama)
+    if (priceMatches) {
+      const rawPrice = priceMatches[priceMatches.length - 1];
       const numericPrice = parseInt(rawPrice.replace(/[^0-9]/g, ''), 10);
       
-      // Clean up the name string
       const rawNamePart = line.replace(rawPrice, '');
       const cleanedName = sanitizeItemName(rawNamePart);
 
-      // Filter out address remnants or invalid names
-      if (cleanedName.length >= 3 && numericPrice >= 1000 && numericPrice <= 1000000) {
-        const { category, expiryDays } = categorizeItem(cleanedName);
+      // STRICT DOUBLE-CHECK ON CLEANED ITEM NAME
+      if (isNoiseOrSummary(cleanedName)) {
+        continue;
+      }
 
+      const letterOnlyCount = cleanedName.replace(/[^a-zA-Z]/g, '').length;
+
+      if (letterOnlyCount >= 3 && numericPrice >= 1000 && numericPrice <= 1000000) {
+        const { category, expiryDays } = categorizeItem(cleanedName);
         items.push({
-          id: Date.now() + Math.floor(Math.random() * 10000),
+          id: Date.now() + Math.floor(Math.random() * 10000) + i,
           name: cleanedName,
           price: numericPrice,
           category: category,
           estimated_expiry_days: expiryDays
         });
+        continue;
+      }
+    }
+
+    // KASUS B: ITEM 2 BARIS (Baris i = Nama, Baris i+1 = Harga)
+    if (i + 1 < lines.length) {
+      const nextLine = lines[i + 1];
+      
+      if (!isNoiseOrSummary(nextLine)) {
+        const nextPriceMatches = nextLine.match(priceRegex);
+
+        if (nextPriceMatches) {
+          const rawPrice = nextPriceMatches[nextPriceMatches.length - 1];
+          const numericPrice = parseInt(rawPrice.replace(/[^0-9]/g, ''), 10);
+
+          const cleanedName = sanitizeItemName(line);
+
+          // STRICT DOUBLE-CHECK ON CLEANED ITEM NAME
+          if (isNoiseOrSummary(cleanedName)) {
+            continue;
+          }
+
+          const letterOnlyCount = cleanedName.replace(/[^a-zA-Z]/g, '').length;
+
+          if (letterOnlyCount >= 3 && numericPrice >= 1000 && numericPrice <= 1000000) {
+            const { category, expiryDays } = categorizeItem(cleanedName);
+            items.push({
+              id: Date.now() + Math.floor(Math.random() * 10000) + i,
+              name: cleanedName,
+              price: numericPrice,
+              category: category,
+              estimated_expiry_days: expiryDays
+            });
+
+            i++; // Skip baris i+1 karena harganya sudah dipakai
+            continue;
+          }
+        }
       }
     }
   }
@@ -147,10 +217,9 @@ app.post('/api/scan', upload.single('receipt'), async (req, res) => {
 
     console.log('[INFO] Received receipt image, processing with Tesseract OCR...');
 
-    // Run local Tesseract OCR on image buffer
     const { data: { text } } = await Tesseract.recognize(
       req.file.buffer,
-      'eng', // Uses English dictionary (can be 'eng+ind' if traineddata is configured)
+      'eng',
       {
         logger: m => {
           if (m.status === 'recognizing text') {
@@ -162,7 +231,6 @@ app.post('/api/scan', upload.single('receipt'), async (req, res) => {
 
     console.log('[DEBUG] Raw Extracted Text:\n', text);
 
-    // Parse raw text into structured JSON format expected by frontend
     const parsedData = parseReceiptText(text);
 
     console.log('[INFO] Successfully parsed receipt data:', parsedData);
