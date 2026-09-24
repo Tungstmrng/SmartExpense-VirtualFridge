@@ -11,25 +11,22 @@ app.use(express.json());
 
 const upload = multer({ storage: multer.memoryStorage() });
 
-// ENHANCED DICTIONARY FOR FRIDGE CATEGORIZATION & EXPIRY ESTIMATION
-const FRIDGE_KEYWORDS = [
-  { keywords: ['milk', 'susu', 'uht', 'creamer', 'indomilk', 'ultramilk', 'dancow', 'm1lk', 'susu/'], category: 'Fridge', expiryDays: 7 },
-  { keywords: ['egg', 'telur', 'tlor'], category: 'Fridge', expiryDays: 14 },
-  { keywords: ['cheese', 'keju', 'mozzarella', 'cheddar', 'kraft'], category: 'Fridge', expiryDays: 10 },
-  { keywords: ['meat', 'daging', 'beef', 'chicken', 'ayam', 'fish', 'ikan', 'seafood', 'sosis', 'sausage', 'nugget', 'so nice', 'fiesta'], category: 'Fridge', expiryDays: 3 },
-  { keywords: ['veggie', 'vegetable', 'sayur', 'spinach', 'bayam', 'tomato', 'tomat', 'carrot', 'wortel', 'cabe', 'chili'], category: 'Fridge', expiryDays: 5 },
-  { keywords: ['fruit', 'buah', 'apple', 'apel', 'banana', 'pisang', 'orange', 'jeruk', 'grape', 'anggur'], category: 'Fridge', expiryDays: 5 },
-  { keywords: ['butter', 'mentega', 'yogurt', 'yoghurt', 'tofu', 'tahu', 'tempe', 'yakult'], category: 'Fridge', expiryDays: 7 }
+// KATEGORI PENGELUARAN RUMAH TANGGA & ITEM BELANJA
+const EXPENSE_CATEGORIES = [
+  { keywords: ['milk', 'susu', 'uht', 'creamer', 'indomilk', 'ultramilk', 'dancow', 'beras', 'rice', 'minyak', 'oil', 'telur', 'egg', 'gula', 'sugar', 'garam', 'tepung', 'mie', 'indomie', 'sedaap'], category: 'Bahan Pangan & Sembako' },
+  { keywords: ['sabun', 'shampoo', 'shampo', 'pasta', 'tooth', 'pencuci', 'sunlight', 'rinso', 'so klin', 'downy', 'tisu', 'tissue', 'cleaner', 'pembersih'], category: 'Kebersihan & Rumah Tangga' },
+  { keywords: ['chitato', 'coca', 'sprite', 'fanta', 'snack', 'biskuit', 'oreo', 'teh', 'tea', 'kopi', 'coffee', 'qtela', 'chocolatos'], category: 'Camilan & Minuman' },
+  { keywords: ['roti', 'bread', 'sosis', 'sausage', 'nugget', 'keju', 'cheese', 'butter', 'mentega', 'yogurt', 'tahu', 'tempe'], category: 'Makanan Segar & Siap Saji' }
 ];
 
 function categorizeItem(itemName) {
   const nameLower = itemName.toLowerCase().trim();
-  for (const group of FRIDGE_KEYWORDS) {
+  for (const group of EXPENSE_CATEGORIES) {
     if (group.keywords.some(kw => nameLower.includes(kw))) {
-      return { category: 'Fridge', expiryDays: group.expiryDays };
+      return group.category;
     }
   }
-  return { category: 'Non-Fridge', expiryDays: 0 };
+  return 'Kebutuhan Umum';
 }
 
 // HELPER: CLEAN ITEM NAMES FROM COLUMN NOISE & LEADING QUANTITIES
@@ -45,23 +42,23 @@ function sanitizeItemName(rawName) {
 function parseReceiptText(rawText) {
   const lines = rawText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
   
-  let merchantName = 'Store / Supermarket';
+  let merchantName = 'Ritel Modern';
   let totalAmount = 0;
   const items = [];
 
   // REGEX PATTERNS FOR SUMMARY & PAYMENT WORDS (HANDLES OCR TYPOS LIKE T0TAL, TUNAL, KEMBAL1)
   const SUMMARY_PATTERNS = [
-    /t[o0][t4a][a4l]/i,            // TOTAL, T0TAL, TOT4L, TOTL
+    /t[o0][t4a][a4l]/i,           // TOTAL, T0TAL, TOT4L, TOTL
     /sub\s*t[o0]t[a4]l/i,         // SUBTOTAL, SUB TOTAL
     /g[r1]and\s*t[o0]t[a4]l/i,    // GRAND TOTAL
     /t[u1n][n1a][a4i1l]/i,        // TUNAI, TUNAL, TUNA1
-    /b[a4]y[a4]r/i,               // BAYAR
+    /b[a4]y[a4]r/i,                // BAYAR
     /k[e3]mb[a4]l[i1a]/i,         // KEMBALI, KEMBALIAN
     /c[a4]sh/i,                   // CASH
     /ch[a4]ng[e3]/i,              // CHANGE
     /s[i1]s[a4]/i,                // SISA
-    /p[a4]j[a4]k|ppn|tax/i,       // PAJAK, PPN, TAX
-    /d[e3]b[i1]t/i,               // DEBIT
+    /p[a4]j[a4]k|ppn|tax/i,        // PAJAK, PPN, TAX
+    /d[e3]b[i1]t/i,                // DEBIT
     /qr[i1]s|g[o0]p[a4]y|ov[o0]|sh[o0]p[e3]e|d[a4]n[a4]/i, // QRIS, GOPAY, OVO, SHOPEE, DANA
     /m[a4]st[e3]rc[a4]rd|v[i1]s[a4]|b[a4]nk|bc[a4]|m[a4]nd[i1]r[i1]/i,
     /h[a4]rg[a4]|j[u1]ml[a4]h|qt[y1]|it[e3]m/i,
@@ -82,7 +79,6 @@ function parseReceiptText(rawText) {
     /-\s*(\d{1,3}(?:[.,]\d{3})+|\b\d{3,6}\b)/
   ];
 
-  // HELPER FUNCTION: STRICT NOISE / SUMMARY CHECKER
   const isNoiseOrSummary = (text) => {
     if (!text) return true;
     const textLower = text.toLowerCase().trim();
@@ -109,7 +105,6 @@ function parseReceiptText(rawText) {
     const line = lines[i];
     const lineLower = line.toLowerCase();
 
-    // STRICT CHECK ON RAW LINE
     if (isNoiseOrSummary(line)) {
       if (lineLower.includes('total') || lineLower.includes('bayar') || lineLower.includes('t0tal')) {
         const matches = line.match(priceRegex);
@@ -119,17 +114,16 @@ function parseReceiptText(rawText) {
           if (parsedTotal > totalAmount) totalAmount = parsedTotal;
         }
       }
-      continue; // Strictly skip line
+      continue;
     }
 
-    // Skip negative price lines (discounts)
     if (line.includes('-') && !lineLower.includes('item')) {
       continue;
     }
 
     const priceMatches = line.match(priceRegex);
 
-    // KASUS A: ITEM 1 BARIS (Nama + Harga di baris yang sama)
+    // KASUS A: ITEM 1 BARIS
     if (priceMatches) {
       const rawPrice = priceMatches[priceMatches.length - 1];
       const numericPrice = parseInt(rawPrice.replace(/[^0-9]/g, ''), 10);
@@ -137,7 +131,6 @@ function parseReceiptText(rawText) {
       const rawNamePart = line.replace(rawPrice, '');
       const cleanedName = sanitizeItemName(rawNamePart);
 
-      // STRICT DOUBLE-CHECK ON CLEANED ITEM NAME
       if (isNoiseOrSummary(cleanedName)) {
         continue;
       }
@@ -145,19 +138,18 @@ function parseReceiptText(rawText) {
       const letterOnlyCount = cleanedName.replace(/[^a-zA-Z]/g, '').length;
 
       if (letterOnlyCount >= 3 && numericPrice >= 1000 && numericPrice <= 1000000) {
-        const { category, expiryDays } = categorizeItem(cleanedName);
+        const category = categorizeItem(cleanedName);
         items.push({
           id: Date.now() + Math.floor(Math.random() * 10000) + i,
           name: cleanedName,
           price: numericPrice,
-          category: category,
-          estimated_expiry_days: expiryDays
+          category: category
         });
         continue;
       }
     }
 
-    // KASUS B: ITEM 2 BARIS (Baris i = Nama, Baris i+1 = Harga)
+    // KASUS B: ITEM 2 BARIS (Multi-Line Lookahead)
     if (i + 1 < lines.length) {
       const nextLine = lines[i + 1];
       
@@ -170,7 +162,6 @@ function parseReceiptText(rawText) {
 
           const cleanedName = sanitizeItemName(line);
 
-          // STRICT DOUBLE-CHECK ON CLEANED ITEM NAME
           if (isNoiseOrSummary(cleanedName)) {
             continue;
           }
@@ -178,16 +169,15 @@ function parseReceiptText(rawText) {
           const letterOnlyCount = cleanedName.replace(/[^a-zA-Z]/g, '').length;
 
           if (letterOnlyCount >= 3 && numericPrice >= 1000 && numericPrice <= 1000000) {
-            const { category, expiryDays } = categorizeItem(cleanedName);
+            const category = categorizeItem(cleanedName);
             items.push({
               id: Date.now() + Math.floor(Math.random() * 10000) + i,
               name: cleanedName,
               price: numericPrice,
-              category: category,
-              estimated_expiry_days: expiryDays
+              category: category
             });
 
-            i++; // Skip baris i+1 karena harganya sudah dipakai
+            i++; 
             continue;
           }
         }
@@ -240,7 +230,7 @@ app.post('/api/scan', upload.single('receipt'), async (req, res) => {
       data: parsedData,
     });
 
-  } catch (error) {
+} catch (error) {
     console.error('[ERROR] Tesseract Processing Failed:', error);
     return res.status(500).json({
       success: false,
